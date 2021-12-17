@@ -1,0 +1,36 @@
+{
+	"mappings": {
+		"properties": {
+			"timestamp": {
+				"type": "date"
+			},
+			"location": {
+				"type": "geo_point"
+			},
+			"geohash": {
+				"type": "geo_point"
+			},
+			"pickup_count": {
+				"type": "long"
+			},
+			"sum_trip_duration": {
+				"type": "long"
+			},
+			"avg_trip_duration": {
+				"type": "long"
+			},
+			"sum_trip_distance": {
+				"type": "long"
+			},
+			"avg_trip_distance": {
+				"type": "long"
+			},
+			"avg_trip_speed": {
+				"type": "double"
+			},
+			"hotspot": {
+				"type": "keyword"
+			}
+		}
+	}
+}
