@@ -1,0 +1,181 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Description: Infrastructure to deploy and run the amazon-taxi-analytics-kinesis-consumer Flink application as a Kinesis Data Analytics for Java application
+
+Parameters:
+  ArtifactBucket:
+    Type: String
+
+  OpenSearchDomainARN:
+    Type: String
+
+  KinesisStreamName:
+    ConstraintDescription: Acceptable characters are uppercase and lowercase letters, numbers, underscores, hyphens and periods.
+    Type: String
+
+  FlinkApplicationName:
+    Type: String
+
+  FlinkApplicationS3Path:
+    Type: String
+
+
+Outputs:
+  KinesisStreamName:
+    Description: Kinesis stream name
+    Value: !Sub ${KinesisStream}
+
+
+Resources:
+  KinesisStream:
+    Type: AWS::Kinesis::Stream
+    Name: !Ref KinesisStreamName
+    Properties:
+      ShardCount: 8
+
+  KinesisAnalyticsFlinkApplication:
+    Type: AWS::KinesisAnalyticsV2::Application
+    Properties:
+      ApplicationName: !Ref FlinkApplicationName
+      RuntimeEnvironment: FLINK-1_13
+      ServiceExecutionRole: !Sub ${KinesisAnalyticsServiceRole.Arn}
+      ApplicationConfiguration:
+        ApplicationCodeConfiguration:
+          CodeContent:
+            S3ContentLocation:
+              BucketARN: !Sub arn:aws:s3:::${ArtifactBucket}
+              FileKey: !Ref FlinkApplicationS3Path
+          CodeContentType: ZIPFILE
+        EnvironmentProperties:
+          PropertyGroups:
+            - PropertyGroupId: FlinkApplicationProperties
+              PropertyMap:
+                InputStreamName: !Ref KinesisStreamName
+                Region: !Sub ${AWS::Region}
+                EventTime: true
+                ElasticsearchEndpoint: !Ref OpenSearchDomainEndpoint
+                S3SinkPath: !Sub s3a://${ArtifactBucket}/kinesis-output
+        FlinkApplicationConfiguration:
+          MonitoringConfiguration:
+            ConfigurationType: CUSTOM
+            LogLevel: INFO
+            MetricsLevel: TASK
+        ApplicationSnapshotConfiguration:
+          SnapshotsEnabled: true
+
+
+  KinesisAnalyticsLogging:
+    Type: "AWS::KinesisAnalyticsV2::ApplicationCloudWatchLoggingOption"
+    Properties:
+      ApplicationName: !Sub ${KinesisAnalyticsFlinkApplication}
+      CloudWatchLoggingOption: 
+        LogStreamARN: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:${FlinkLogGroup}:log-stream:${FlinkLogStream}
+
+  FlinkLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: 
+      RetentionInDays: 7
+
+  FlinkLogStream:
+    Type: AWS::Logs::LogStream
+    Properties: 
+      LogGroupName: !Ref FlinkLogGroup
+
+  FlinkNotProcessingFromKinesisAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Alarm if Flink stops reading from the Kinesis stream or falls behind processing the available data
+      Namespace: AWS/KinesisAnalytics
+      MetricName: millisBehindLatest
+      Dimensions:
+        - Name: Id
+          Value: !Join ["_", !Split ["-", !Ref KinesisStream]]
+        - Name: Application
+          Value: !Sub ${KinesisAnalyticsFlinkApplication}
+        - Name: Flow
+          Value: Input
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 60000
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: breaching
+
+
+  KinesisAnalyticsServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument: |
+        {
+            "Statement": [{
+                "Effect": "Allow",
+                "Principal": { "Service": [ "kinesisanalytics.amazonaws.com" ]},
+                "Action": [ "sts:AssumeRole" ]
+            }]
+        }
+      Policies:
+        -
+          PolicyName: root
+          PolicyDocument:
+            !Sub |
+              {
+                  "Version": "2012-10-17",
+                  "Statement": [
+                      {
+                          "Effect": "Allow",
+                          "Action": [
+                              "s3:*",
+                          ],
+                          "Resource": [
+                              "arn:aws:s3:::${ArtifactBucket}/*"
+                          ]
+                      },
+                      {
+                          "Effect": "Allow",
+                          "Action": [
+                              "logs:DescribeLogGroups"
+                          ],
+                          "Resource": [
+                              "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:*"
+                          ]
+                      },
+                      {
+                          "Effect": "Allow",
+                          "Action": [
+                              "logs:DescribeLogStreams",
+                              "logs:PutLogEvents"
+                          ],
+                          "Resource": [
+                              "${FlinkLogGroup.Arn}"
+                          ]
+                      },
+                      {
+                          "Effect": "Allow",
+                          "Action": "kinesis:*",
+                          "Resource": "${KinesisStream.Arn}"
+                      },
+                      {
+                          "Effect": "Allow",
+                          "Action": [
+                            "es:ESHttpPut",
+                            "es:ESHttpPost",
+                            "es:ESHttpHead"
+                          ],
+                          "Resource": "${OpenSearchDomainARN}/*"
+                      }
+                  ]
+              }
+
+Mappings:
+  AWSRegionArch2AMI:
+    eu-central-1:
+      HVM64: ami-0f3a43fbf2d3899f7
+    eu-west-1:
+      HVM64: ami-07683a44e80cd32c5
+    us-west-2:
+      HVM64: ami-061392db613a6357b
+    us-east-1:
+      HVM64: ami-0de53d8956e8dcf80
+    us-east-2:
+      HVM64: ami-02bcbb802e03574ba

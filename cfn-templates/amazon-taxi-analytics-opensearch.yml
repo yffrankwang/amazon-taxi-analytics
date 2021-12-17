@@ -1,0 +1,72 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Description: Infrastructure to create opensearch
+
+Parameters:
+  DomainName:
+    AllowedPattern: '[a-z0-9\-].*'
+    ConstraintDescription: The name must start with a lowercase letter and must be between 3 and 28 characters. Valid characters are a-z (lowercase only), 0-9, and - (hyphen).
+    Description: Domain name for OpenSearch
+    MaxLength: 28
+    MinLength: 3
+    Type: String
+
+  SubnetId:
+    Description: The Subnet ID for the OpenSearch
+    Type: AWS::EC2::Subnet::Id
+
+
+Outputs:
+  OpenSearchDomainARN:
+    Description: OpenSearchService Domain ARN
+    Value: !Sub ${OpenSearchService.Arn}
+
+  OpenSearchDomainEndpoint:
+    Description: Endpoint to access the OpenSearchService
+    Value: !Sub ${OpenSearchService.DomainEndpoint}
+
+  OpenSearchDashboardURL:
+    Description: URL to access the dasboard
+    Value: !Sub https://${OpenSearchService.DomainEndpoint}/_dashboards/
+
+
+Resources:
+  OpenSearchService:
+    Type: AWS::OpenSearchService::Domain
+    Properties:
+      DomainName: !Ref DomainName
+      EngineVersion: OpenSearch_1.0
+      ClusterConfig:
+        InstanceCount: 1
+        InstanceType: t3.medium.search
+      EBSOptions:
+        EBSEnabled: true
+        VolumeSize: 100
+        VolumeType: gp2
+      VPCOptions:
+        SubnetIds:
+        - !Ref SubnetId
+      AccessPolicies:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            AWS: '*'
+          Action:
+          - 'es:*'
+          Resource: '*'
+
+
+
+Mappings:
+  AWSRegionArch2AMI:
+    eu-central-1:
+      HVM64: ami-0f3a43fbf2d3899f7
+    eu-west-1:
+      HVM64: ami-07683a44e80cd32c5
+    us-west-2:
+      HVM64: ami-061392db613a6357b
+    us-east-1:
+      HVM64: ami-0de53d8956e8dcf80
+    us-east-2:
+      HVM64: ami-02bcbb802e03574ba

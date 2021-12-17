@@ -1,0 +1,121 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Description: Builds and runs the kinesis-analytics-taxi-consumer Flink application in a fully managed environment using Amazon Kinesis Data Analytics for Java Applications (amazon-kinesis-analytics-taxi-consumer)
+
+Parameters:
+  OpenSearchDomainName:
+    AllowedPattern: '[a-z0-9\-].*'
+    ConstraintDescription: The name must start with a lowercase letter and must be between 3 and 28 characters. Valid characters are a-z (lowercase only), 0-9, and - (hyphen).
+    Description: Domain name for OpenSearch
+    MaxLength: 28
+    MinLength: 3
+    Type: String
+
+  KinesisStreamName:
+    ConstraintDescription: Acceptable characters are uppercase and lowercase letters, numbers, underscores, hyphens and periods.
+    Type: String
+
+  FlinkApplicationName:
+    Type: String
+
+  SubnetId:
+    Description: The Subnet ID for the OpenSearch and EC2 instance
+    Type: AWS::EC2::Subnet::Id
+
+  SshKeyName:
+    Description: Name of an existing EC2 KeyPair to enable SSH access to the EC2 instance for replaying events
+    ConstraintDescription: MuSt be the name of an existing EC2 KeyPair
+    Type: AWS::EC2::KeyPair::KeyName
+
+  ClientIpAddressRange:
+    AllowedPattern: (\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})
+    ConstraintDescription: Must be a valid IP CIDR range of the form x.x.x.x/x
+    Description: IP address range that is able to access the EC2 instance and that gets full read and write access to the Elasticsearch Cluster and the Kibana dashboard
+    MaxLength: 18
+    MinLength: 9
+    Type: String
+
+  ExternalArtifactBucket:
+    Description: Optional. S3 bucket that is used to store the compiled binaries and output files
+    Type: String
+
+  Release:
+    Description: Github branch or release to be used for the replay application
+    Type: String
+    Default: master
+
+
+Conditions:
+  UseInternalArtifactBucket:
+    !Equals [!Ref ExternalArtifactBucket, ""]
+
+
+Outputs:
+  ArtifactBucket:
+    Description: Bucket containing the generated jar file and output files
+    Value: !If [UseInternalArtifactBucket, !Ref InternalArtifactBucket, !Ref ExternalArtifactBucket]
+
+  ProducerInstance:
+    Description: SSH connection to the instance that ingests trip events into the Kinesis stream
+    Value: !GetAtt TaxiConsumerInfrastructure.Outputs.ProducerInstance
+
+  ProducerCommand:
+    Description: Command to populate Kinesis stream with taxi trip events
+    Value: !GetAtt TaxiConsumerInfrastructure.Outputs.ProducerCommand
+
+  KibanaDashboardURL:
+    Description: URL to access the Kibana dasboard
+    Value: !GetAtt TaxiConsumerInfrastructure.Outputs.KibanaDashboardURL
+
+  CloudWatchDashboardURL:
+    Description: URL to access metrics in a CloudWatch dasboard
+    Value: !GetAtt TaxiConsumerInfrastructure.Outputs.CloudWatchDashboardURL
+
+
+Resources:
+  InternalArtifactBucket:
+    Condition: UseInternalArtifactBucket
+    Type: AWS::S3::Bucket
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+
+  ProgramBuildStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/yfw-useast1/amazon-taxi-analytics/cfn-templates/amazon-taxi-analytics-build-pipeline.yml
+      Parameters:
+        ArtifactBucket: !If [UseInternalArtifactBucket, !Ref InternalArtifactBucket, !Ref ExternalArtifactBucket]
+        Release: !Ref Release
+
+  OpenSearchBuildStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/yfw-useast1/amazon-taxi-analytics/cfn-templates/amazon-taxi-analytics-opensearch.yml
+      Parameters:
+        DomainName: !Ref OpenSearchDomainName
+        SubnetId: !Ref SubnetId
+
+  ProducerBuildStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/yfw-useast1/amazon-taxi-analytics/cfn-templates/amazon-taxi-analytics-producer.yml
+      Parameters:
+        KinesisStreamName: !Ref KinesisStreamName
+        OpenSearchDomainEndpoint: !GetAtt OpenSearchBuildStack.Outputs.OpenSearchDomainEndpoint
+        SshKeyName: !Ref SshKeyName
+        SubnetId: !Ref SubnetId
+        ClientIpAddressRange: !Ref ClientIpAddressRange
+        Release: !Ref Release
+
+  KinesisBuildStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/yfw-useast1/amazon-taxi-analytics/cfn-templates/amazon-taxi-analytics-kinesis.yml
+      Parameters:
+        ArtifactBucket: !If [UseInternalArtifactBucket, !Ref InternalArtifactBucket, !Ref ExternalArtifactBucket]
+        OpenSearchDomainARN: !GetAtt OpenSearchBuildStack.Outputs.OpenSearchDomainARN
+        KinesisStreamName: !Ref KinesisStreamName
+        FlinkApplicationName: !Ref FlinkApplicationName
+        FlinkApplicationS3Path: !GetAtt ProgramBuildStack.Outputs.ConsumerAppS3Path
+

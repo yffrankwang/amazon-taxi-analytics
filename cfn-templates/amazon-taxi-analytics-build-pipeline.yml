@@ -1,0 +1,288 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Description: Build pipeline to build the portal web app and kinesis stream app
+
+Parameters:
+  ExternalArtifactBucket:
+    Description: Optional. S3 bucket that is used to store the compiled binaries and output files
+    Type: String
+
+  Release:
+    Description: Github branch or release to be used for the application
+    Type: String
+    Default: master
+
+
+Conditions:
+  UseInternalArtifactBucket:
+    !Equals [!Ref ExternalArtifactBucket, ""]
+
+
+Outputs:
+  ArtifactBucket:
+    Description: Bucket containing the generated jar file and output files
+    Value: !If [UseInternalArtifactBucket, !Ref InternalArtifactBucket, !Ref ExternalArtifactBucket]
+
+  ConsumerAppS3Path:
+    Description: Kinesis Stream Consumer Application jar S3 Path
+    Value: !Sub
+      - amazon-taxi-analytics/artifacts/amazon-taxi-analytics-kinesis-${Release}.jar
+      - { ArtifactBucket: !If [UseInternalArtifactBucket, !Ref InternalArtifactBucket, !Ref ExternalArtifactBucket] }
+
+  ProducerAppS3Path:
+    Description: Kinesis Stream Producer Application jar S3 Path
+    Value: !Sub
+      - amazon-taxi-analytics/artifacts/amazon-taxi-analytics-kinesis-${Release}.jar
+      - { ArtifactBucket: !If [UseInternalArtifactBucket, !Ref InternalArtifactBucket, !Ref ExternalArtifactBucket] }
+
+  ArtifactsCopyCommand:
+    Description: AWS cli command to copy the jar files
+    Value: !Sub
+      - aws s3 cp --recursive --exclude '*' --include 'amazon-taxi-analytics-kinesis-*.jar' 's3://${ArtifactBucket}/amazon-taxi-analytics/artifacts/' .
+      - { ArtifactBucket: !If [UseInternalArtifactBucket, !Ref InternalArtifactBucket, !Ref ExternalArtifactBucket] }
+
+
+Resources:
+  InternalArtifactBucket:
+    Condition: UseInternalArtifactBucket
+    Type: AWS::S3::Bucket
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+
+
+  DownloadSources:
+    Type: Custom::DownloadSources
+    Properties:
+      ServiceToken: !GetAtt DownloadSourcesFunction.Arn
+
+
+  DownloadSourcesFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        ZipFile: !Sub 
+          - |
+          import boto3
+          import cfnresponse
+          from urllib.request import urlopen
+
+          def handler(event, context):
+            s3 = boto3.client('s3')
+
+            source = urlopen('https://github.com/yffrankwang/amazon-taxi-analytics/archive/${Release}.zip')
+            s3.put_object(Bucket='${ArtifactBucket}',Key='amazon-taxi-analytics/sources/amazon-taxi-analytics.zip',Body=source.read())
+
+            cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+          - { ArtifactBucket: !If [UseInternalArtifactBucket, !Ref InternalArtifactBucket, !Ref ExternalArtifactBucket] }
+      Runtime: python3.7
+      Timeout: 60
+
+
+  BuildPipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      RoleArn: !GetAtt CodePipelineServiceRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !If [UseInternalArtifactBucket, !Ref InternalArtifactBucket, !Ref ExternalArtifactBucket]
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: S3SourceAction
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Version: "1"
+                Provider: S3
+              OutputArtifacts:
+                - Name: ProjectSource
+              Configuration:
+                S3Bucket: !If [UseInternalArtifactBucket, !Ref InternalArtifactBucket, !Ref ExternalArtifactBucket]
+                S3ObjectKey: amazon-taxi-analytics/sources/amazon-taxi-analytics.zip
+              RunOrder: 1
+        - Name: Build
+          Actions:
+            - Name: BuildApps
+              InputArtifacts:
+                - Name: ProjectSource
+              OutputArtifacts:
+                - Name: BuildProjectOutput
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: "1"
+                Provider: CodeBuild
+              Configuration:
+                ProjectName: !Ref BuildProject
+              RunOrder: 1
+        - Name: Copy
+          Actions:
+            - Name: CopyApps
+              InputArtifacts:
+                - Name: BuildProjectOutput
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: "1"
+                Provider: S3
+              Configuration:
+                BucketName: !If [UseInternalArtifactBucket, !Ref InternalArtifactBucket, !Ref ExternalArtifactBucket]
+                DeploymentPath: amazon-taxi-analytics/artifacts/
+                Extract: true
+              RunOrder: 1
+
+
+  BuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_LARGE
+        Image: aws/codebuild/java:openjdk-11
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: !Sub |
+          version: 0.2
+
+          phases:
+            build:
+              commands:
+                - cd amazon-taxi-analytics-*/kinesis-stream-app
+                - mvn clean package -B 
+                - mv ./target/amazon-taxi-analytics-kinesis-*.jar ../../amazon-taxi-analytics-kinesis-consumer-${Release}.jar
+                - cd ../..
+                - cd amazon-taxi-analytics-*/kinesis-replay-app
+                - mvn clean package -B 
+                - mv ./target/amazon-taxi-analytics-kinesis-*.jar ../../amazon-taxi-analytics-kinesis-replay-${Release}.jar
+
+          artifacts:
+            files:
+              - amazon-taxi-analytics-*.jar
+            discard-paths: yes
+      TimeoutInMinutes: 5
+
+
+  CodePipelineServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument: |
+        {
+            "Statement": [{
+                "Effect": "Allow",
+                "Principal": { "Service": [ "codepipeline.amazonaws.com" ]},
+                "Action": [ "sts:AssumeRole" ]
+            }]
+        }
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Resource:
+                - !Sub 
+                  - arn:aws:s3:::${ArtifactBucket}
+                  - { ArtifactBucket: !If [UseInternalArtifactBucket, !Ref InternalArtifactBucket, !Ref ExternalArtifactBucket] }
+                - !Sub 
+                  - arn:aws:s3:::${ArtifactBucket}/*
+                  - { ArtifactBucket: !If [UseInternalArtifactBucket, !Ref InternalArtifactBucket, !Ref ExternalArtifactBucket] }
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:GetBucketVersioning
+              - Resource: !Sub ${BuildProject.Arn}
+                Effect: Allow
+                Action:
+                  - codebuild:StartBuild
+                  - codebuild:BatchGetBuilds
+
+
+  CodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument: |
+        {
+            "Statement": [{
+                "Effect": "Allow",
+                "Principal": { "Service": [ "codebuild.amazonaws.com" ]},
+                "Action": [ "sts:AssumeRole" ]
+            }]
+        }
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Resource: 
+                  - arn:aws:logs:*:*:log-group:/aws/codebuild/*
+                  - arn:aws:logs:*:*:log-group:/aws/codebuild/*:log-stream:*
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+              - Resource: 
+                  - !Sub 
+                    - arn:aws:s3:::${ArtifactBucket}
+                    - { ArtifactBucket: !If [UseInternalArtifactBucket, !Ref InternalArtifactBucket, !Ref ExternalArtifactBucket] }
+                  - !Sub 
+                    - arn:aws:s3:::${ArtifactBucket}/*
+                    - { ArtifactBucket: !If [UseInternalArtifactBucket, !Ref InternalArtifactBucket, !Ref ExternalArtifactBucket] }
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:GetObjectVersion
+                  - s3:ListBucket
+
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: /
+      Policies:
+      - PolicyName: root
+        PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+          - Resource: "*"
+            Effect: Allow
+            Action:
+              - codepipeline:PutJobSuccessResult
+              - codepipeline:PutJobFailureResult
+          - Resource:
+              - arn:aws:logs:*:*:log-group:/aws/lambda/*
+              - arn:aws:logs:*:*:log-group:/aws/lambda/*:log-stream:*
+            Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+          - Resource: 
+              - !Sub 
+                - arn:aws:s3:::${ArtifactBucket}
+                - { ArtifactBucket: !If [UseInternalArtifactBucket, !Ref InternalArtifactBucket, !Ref ExternalArtifactBucket] }
+              - !Sub 
+                - arn:aws:s3:::${ArtifactBucket}/*
+                - { ArtifactBucket: !If [UseInternalArtifactBucket, !Ref InternalArtifactBucket, !Ref ExternalArtifactBucket] }
+            Effect: Allow
+            Action:
+              - s3:PutObject
