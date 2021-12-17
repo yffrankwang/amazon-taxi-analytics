@@ -29,7 +29,17 @@ ABC company is a ride hailing company, they have large volume of subscribe users
 At least **10 thousand** drivers’ concurrencies.
 
 
-## Architecture on AWS
+## Architecture on AWS Cloud
+
+### AWS Services Used
+1. [Amazon EC2](https://aws.amazon.com/amazon/ec2)
+1. [Amazon Kinesis Data Stream](https://aws.amazon.com/kinesis/data-streams/)
+1. [Amazon Kinesis Data Analytics](https://aws.amazon.com/kinesis/data-analytics/) Flink Application
+1. [Amazon S3](https://aws.amazon.com/s3/)  Bucket
+1. [Amazon OpenSearch Service](https://aws.amazon.com/opensearch-service/)
+1. [Amazon SageMaker](https://aws.amazon.com/amazon/sagemaker)
+1. [Amazon EventBridge](https://aws.amazon.com/jp/eventbridge/)
+
 
 ### Diagram
 
@@ -45,82 +55,11 @@ At least **10 thousand** drivers’ concurrencies.
 5. End users signin the portal web application hosted on EC2 instances (The user identity is managed by Amazon Cognito) to do some trend analysis. The web application accepts the user requests, retrieve data from OpenSearch Service, generates charts, and displays them to users.
 
 
-### AWS Services Used
-1. [Amazon EC2](https://aws.amazon.com/amazon/ec2)
-1. [Amazon Kinesis Data Stream](https://aws.amazon.com/kinesis/data-streams/)
-1. [Amazon Kinesis Data Analytics](https://aws.amazon.com/kinesis/data-analytics/) Flink Application
-1. [Amazon S3](https://aws.amazon.com/s3/)  Bucket
-1. [Amazon OpenSearch Service](https://aws.amazon.com/opensearch-service/)
-1. [Amazon SageMaker](https://aws.amazon.com/amazon/sagemaker)
-1. [Amazon EventBridge](https://aws.amazon.com/jp/eventbridge/)
-
 ### Cost Estimate
 
-**10 thousand** request / 1 second.
+**Total Monthly Cost: 3,111.63 USD**
 
-#### Kinesis Data Stream
-- 0.50 KB / 1024 KB to MB conversion factor = 0.00048828 MB (Record size)
-- 0.00048828 MB x 10,000 records per sec = 4.88 MB/sec (Data ingress rate)
-- 4.88 MB/sec (Data ingress rate) / 1 MB per second per shard ingress capacity = 4.88 shards needed for ingress
-- 4.88 MB/sec (Data ingress rate) x 4 consumer applications = 19.52 MB/sec (Data egress rate)
-- 19.52 MB/sec / 2 MB per second per shard egress capacity = 9.76 shards needed for egress
-- 10,000 records per sec / 1000 factor for records per shard = 10.00 shards needed for records
-- Max (4.88 shards needed for ingress, 9.76 shards needed for egress, 10.000 shards needed for records) = 10.00 Number of shards
-- RoundUp (10.000) = 10 shards
-- 10 shards x 730 hours in a month = 7,300.00 Shard hours per month
-- 7,300.00 Shard hours per month x 0.015 USD = 109.50 USD
-- **Shard hours per month cost: 109.50 USD**
-- 0.50 KB / 25 Payload Unit factor = 0.02 PUT Payload Units fraction
-- RoundUp (0.02) = 1 PUT Payload Units
-- 1 PUT Payload Units x 10,000 records per sec x 2628000 seconds in a month = 26,280,000,000.00 PUT Payload Units per month
-- 26,280,000,000.00 PUT Payload Units x 0.000000014 USD = 367.92 USD
-- **PUT Payload Units per month cost: 367.92 USD**
-- 109.50 USD + 367.92 USD = 477.42 USD
-- **Kinesis data stream cost (monthly): 477.42 USD**
-
-
-#### Kinesis Flink Applications
-- 4 KPUs + 1 additional orchestration KPU(s) = 5 billable KPUs per hour
-- 1 applications x 5 KPUs x 730 Hours in a month = 3,650 KPU hours per month
-- 3,650 KPU hours x 0.11 USD = 401.50 USD for KPUs
-- **Apache Flink KPU cost: 401.50 USD**
-- 1 applications x 4 KPUs x 50 GB running application storage = 200 GBs per month
-- 200 GB x 0.10 USD = 20.00 USD for running application storage
-- **Running application storage cost: 20.00 USD**
-- 100 GB x 0.023 USD = 2.30 USD for durable application backup storage
-- RoundUp (2.3000) = 2.3000000000000003 USD for durable application backup storage rounded up to nearest cent
-- **Durable application backup storage cost: 2.3000000000000003 USD**
-- 401.50 USD + 20.00 USD + 2.3000000000000003 USD = 423.80 USD per month
-- **Kinesis Data Analytics for Apache Flink applications cost (monthly): 423.80 USD**
-
-
-#### EC2 Instances
-- 4 instances (a1.xlarge) x 0.102 USD x 730 hours in a month = 297.84 USD (monthly onDemand cost)
-- **Amazon EC2 On-Demand instances (monthly): 297.84 USD**
-- 30 GB x 0.10 USD x 4 instances = 12.00 USD (EBS Storage Cost)
-- **EBS Storage Cost: 12.00 USD**
-- **Amazon Elastic Block Storage (EBS) pricing (monthly): 12.00 USD**
-
-
-#### OpenSearch Service
-- 2 instances (c4 2xlarge.search) x 0.58700000 USD hourly x 730 hours in a month = 857.02 USD (Amazon OpenSearch Service data instance cost)
-- **Amazon OpenSearch Service data instance cost (monthly): 857.02 USD**
-- 1 instance (c4 2xlarge.search) x 0.58700000 USD hourly x 730 hours in a month = 428.51 USD (Amazon OpenSearch Service dedicated master instance cost)
-- **Amazon OpenSearch Service dedicated master instance cost (monthly): 428.51 USD**
-- Storage amount: 1 TB x 1024 GB in a TB = 1024 GB
-- Pricing calculations: 1,024 GB x 0.135 USD x 2 instances = 276.48 USD (EBS Storage Cost)
-- **Amazon OpenSearch Service EBS storage cost (monthly): 276.48 USD**
-
-
-#### SageMarker
-- 1 data scientist(s) x 1 Studio Notebook instance(s) = 1.00 Studio Notebook instance(s)
-- 1.00 Studio Notebook instance(s) x 24 hours per day x 5 days per month = 120.00 SageMaker Studio Notebook hours per month
-- 120.00 hours per month x 2.448 USD per hour instance cost = 293.76 USD(monthly On-Demand cost)
-- **Total cost for Studio Notebooks (monthly): 293.76 USD**
-
-
-**Total Monthly Cost: 3,066.83 USD**
-
+Detail: [AWS Pricing Calculator](https://calculator.aws/#/estimate?id=886ed0f266f88268c85ed11d2a09471dccd50058)
 
 
 
@@ -145,7 +84,7 @@ You can obtain all of the following commands, including their correct parameters
 ```sh
 $ ssh ec2-user@«Replay instance DNS name»
 
-$ java -jar amazon-kinesis-replay-*.jar -streamName «Kinesis data stream name» -streamRegion «AWS region» -speedup 3600
+$ java -jar amazon-kinesis-replay-*.jar -streamName «Kinesis data stream name» -streamRegion «AWS region» -speedup 3600 -objectPrefix "trip data/green_tripdata_2019"
 ```
 
 You can then go ahead and inspect the derived data through the Kibana dashboard that has been created. Or you can create your own visualizations to explore the data in Kibana.
@@ -184,4 +123,5 @@ A Jupyter Notebook for training data use SageMaker DeepAR algorithm.
 - WEB APP: user signin UI/API connected with cognito.
 - WEB APP: a API for real-time drive event (collect and send the event to Kinesis Data Stream).
 - WEB APP: different UI for different user groups.
+
 
